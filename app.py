@@ -44,41 +44,58 @@ def calculate_percentage_changes(df, indices):
 pct_change_df = calculate_percentage_changes(df, available_indices)
 
 app.layout = html.Div([
-    html.H1("Stock Indices Dashboard", style={'textAlign': 'center'}),
+    html.H1("Stock Indices Dashboard", style={'textAlign': 'center', 'marginBottom': '30px'}),
 
+    # Top Section: Graph and Controls
     html.Div([
-        # Left side: Graph and Table
+        # Left side: Graph
         html.Div([
-            dcc.Graph(id='index-graph'),
-            html.Div(id='table-container')
+            dcc.Loading(
+                id="loading-graph",
+                type="default",
+                children=dcc.Graph(id='index-graph')
+            )
         ], style={'width': '75%', 'display': 'inline-block', 'verticalAlign': 'top'}),
 
         # Right side: Controls
         html.Div([
-            html.H3("Select Indices"),
-            dcc.Checklist(
-                id='index-selector',
-                options=[{'label': i, 'value': i} for i in available_indices],
-                value=['Nifty50'] if 'Nifty50' in available_indices else [available_indices[0]],
-                labelStyle={'display': 'block'}
-            ),
-            html.Br(),
-            html.H3("Select Days"),
-            dcc.Dropdown(
-                id='days-selector',
-                options=[
-                    {'label': '30 Days', 'value': 30},
-                    {'label': '90 Days', 'value': 90},
-                    {'label': '180 Days', 'value': 180},
-                    {'label': '365 Days', 'value': 365},
-                    {'label': 'All Data', 'value': 0}
-                ],
-                value=90,
-                clearable=False
-            )
-        ], style={'width': '20%', 'display': 'inline-block', 'verticalAlign': 'top', 'padding': '20px', 'backgroundColor': '#f9f9f9'})
-    ], style={'display': 'flex'})
-])
+            html.Div([
+                html.H3("Select Indices", style={'marginTop': '0'}),
+                dcc.Checklist(
+                    id='index-selector',
+                    options=[{'label': i, 'value': i} for i in available_indices],
+                    value=['Nifty50'] if 'Nifty50' in available_indices else [available_indices[0]],
+                    labelStyle={'display': 'block', 'marginBottom': '5px'}
+                ),
+                html.Br(),
+                html.H3("Select Days"),
+                dcc.Dropdown(
+                    id='days-selector',
+                    options=[
+                        {'label': '30 Days', 'value': 30},
+                        {'label': '90 Days', 'value': 90},
+                        {'label': '180 Days', 'value': 180},
+                        {'label': '365 Days', 'value': 365},
+                        {'label': 'All Data', 'value': 0}
+                    ],
+                    value=90,
+                    clearable=False
+                )
+            ], style={
+                'padding': '20px',
+                'backgroundColor': '#f9f9f9',
+                'borderRadius': '10px',
+                'boxShadow': '0 4px 6px rgba(0,0,0,0.1)'
+            })
+        ], style={'width': '22%', 'marginLeft': '2%', 'display': 'inline-block', 'verticalAlign': 'top'})
+    ], style={'display': 'flex', 'marginBottom': '40px'}),
+
+    # Bottom Section: Table
+    html.Div([
+        html.H2("Index Percentage Change", style={'textAlign': 'center', 'marginBottom': '20px'}),
+        html.Div(id='table-container')
+    ], style={'width': '100%'})
+], style={'padding': '20px', 'fontFamily': 'Arial, sans-serif'})
 
 @app.callback(
     [Output('index-graph', 'figure'),
@@ -86,9 +103,9 @@ app.layout = html.Div([
     [Input('index-selector', 'value'),
      Input('days-selector', 'value')]
 )
-def update_graph(selected_indices, selected_days):
+def update_dashboard(selected_indices, selected_days):
     if not selected_indices:
-        return go.Figure()
+        return go.Figure(), html.Div("Please select at least one index.")
 
     filtered_df = df[df['Index_Name'].isin(selected_indices)]
 
@@ -111,18 +128,21 @@ def update_graph(selected_indices, selected_days):
         title="Index Value Over Time",
         xaxis_title="Date",
         yaxis_title="Close Value",
-        hovermode="x unified"
+        hovermode="x unified",
+        margin={'l': 40, 'b': 40, 't': 40, 'r': 10},
+        legend={'orientation': 'h', 'yanchor': 'bottom', 'y': 1.02, 'xanchor': 'right', 'x': 1}
     )
 
     table = dash_table.DataTable(
         columns=[{"name": i, "id": i} for i in pct_change_df.columns],
         data=pct_change_df.to_dict('records'),
-        style_table={'overflowX': 'auto'},
-        style_cell={'textAlign': 'left', 'padding': '10px'},
-        style_header={'backgroundColor': 'rgb(230, 230, 230)', 'fontWeight': 'bold'}
+        style_table={'overflowX': 'auto', 'border': '1px solid #ccc'},
+        style_cell={'textAlign': 'left', 'padding': '12px', 'minWidth': '100px'},
+        style_header={'backgroundColor': '#f4f4f4', 'fontWeight': 'bold', 'border': '1px solid #ccc'},
+        style_data={'border': '1px solid #eee'}
     )
 
-    return fig, [html.H3("Percentage Change Over Intervals"), table]
+    return fig, table
 
 if __name__ == '__main__':
     app.run(debug=True)
