@@ -1,148 +1,121 @@
 import dash
-from dash import dcc, html, dash_table
-from dash.dependencies import Input, Output
+from dash import dcc, html, Input, Output
+import dash_ag_grid as dag
 import plotly.graph_objs as go
 import pandas as pd
-from data_loader import load_data
+from data_loader import load_data, load_equity_data, get_index_constituents, calculate_pct_changes
 
+# dangerously_allow_code=True is required for using JavaScript functions in column definitions
 app = dash.Dash(__name__)
 
-# Load initial data
-df = load_data()
-available_indices = sorted(df['Index_Name'].unique())
+# Load data
+df_indices = load_data()
+df_equity = load_equity_data()
+constituents_map = get_index_constituents()
 
-def calculate_percentage_changes(df, indices):
-    intervals = [7, 14, 21, 30, 45, 90, 180, 365]
-    results = []
+# Calculate changes
+indices_changes = calculate_pct_changes(df_indices, 'Index_Name', 'Close_Index_Value')
+equity_changes = calculate_pct_changes(df_equity, 'Stock_Symbol', 'Close_Value')
 
-    latest_date = df['Date'].max()
+# Prepare Master-Detail Data
+master_data = []
+for _, row in indices_changes.iterrows():
+    index_name = row['Name']
+    constituents = constituents_map.get(index_name, [])
+    detail_data = equity_changes[equity_changes['Name'].isin(constituents)].to_dict('records')
+    master_row = row.to_dict()
+    master_row['constituents'] = detail_data
+    master_data.append(master_row)
 
-    for index in indices:
-        index_df = df[df['Index_Name'] == index].sort_values('Date', ascending=False)
-        if index_df.empty:
-            continue
+# Color scale function in JS
+color_scale_js = """
+function(params) {
+    if (params.value == null) return {};
+    if (params.value > 0) {
+        const alpha = Math.min(params.value / 10, 1) * 0.7 + 0.1;
+        return {backgroundColor: `rgba(0, 255, 0, ${alpha})`, color: 'black'};
+    } else if (params.value < 0) {
+        const alpha = Math.min(Math.abs(params.value) / 10, 1) * 0.7 + 0.1;
+        return {backgroundColor: `rgba(255, 0, 0, ${alpha})`, color: alpha > 0.5 ? 'white' : 'black'};
+    }
+    return {};
+}
+"""
 
-        latest_value = index_df.iloc[0]['Close_Index_Value']
-        row = {'Index': index}
+common_col_defs = [
+    {"field": "7d", "headerName": "7 Days"},
+    {"field": "14d", "headerName": "14 Days"},
+    {"field": "21d", "headerName": "21 Days"},
+    {"field": "30d", "headerName": "30 Days"},
+    {"field": "45d", "headerName": "45 Days"},
+    {"field": "90d", "headerName": "90 Days"},
+    {"field": "180d", "headerName": "180 Days"},
+    {"field": "365d", "headerName": "365 Days"},
+]
 
-        for days in intervals:
-            target_date = latest_date - pd.Timedelta(days=days)
-            # Find the closest date before or on target_date
-            past_data = index_df[index_df['Date'] <= target_date]
+for col in common_col_defs:
+    col["valueFormatter"] = {"function": "params.value != null ? params.value.toFixed(2) + '%' : 'N/A'"}
+    col["cellStyle"] = {"function": color_scale_js}
+    col["sortable"] = True
 
-            if not past_data.empty:
-                past_value = past_data.iloc[0]['Close_Index_Value']
-                pct_change = ((latest_value - past_value) / past_value) * 100
-                row[f'{days} Days'] = f"{pct_change:.2f}%"
-            else:
-                row[f'{days} Days'] = "N/A"
-        results.append(row)
+column_defs = [
+    {"field": "Name", "headerName": "Index", "cellRenderer": "agGroupCellRenderer", "pinned": "left", "sortable": True},
+] + common_col_defs
 
-    return pd.DataFrame(results)
-
-# Pre-calculate percentage changes
-pct_change_df = calculate_percentage_changes(df, available_indices)
+detail_column_defs = [
+    {"field": "Name", "headerName": "Stock", "pinned": "left", "sortable": True},
+] + common_col_defs
 
 app.layout = html.Div([
-    html.H1("Stock Indices Dashboard", style={'textAlign': 'center', 'marginBottom': '30px'}),
+    html.H1("Expandable Stock Indices Dashboard", style={'textAlign': 'center'}),
 
-    # Top Section: Graph and Controls
     html.Div([
-        # Left side: Graph
+        html.Div([dcc.Graph(id='index-graph')], style={'width': '75%'}),
         html.Div([
-            dcc.Loading(
-                id="loading-graph",
-                type="default",
-                children=dcc.Graph(id='index-graph')
-            )
-        ], style={'width': '75%', 'display': 'inline-block', 'verticalAlign': 'top'}),
+            html.H3("Filters"),
+            dcc.Checklist(id='index-selector', options=[{'label': k, 'value': k} for k in constituents_map.keys()], value=['Nifty50']),
+            html.Br(),
+            dcc.Dropdown(id='days-selector', options=[{'label': f'{d} Days', 'value': d} for d in [30, 90, 180, 365]], value=90)
+        ], style={'width': '23%', 'padding': '20px', 'backgroundColor': '#f9f9f9'})
+    ], style={'display': 'flex'}),
 
-        # Right side: Controls
-        html.Div([
-            html.Div([
-                html.H3("Select Indices", style={'marginTop': '0'}),
-                dcc.Checklist(
-                    id='index-selector',
-                    options=[{'label': i, 'value': i} for i in available_indices],
-                    value=['Nifty50'] if 'Nifty50' in available_indices else [available_indices[0]],
-                    labelStyle={'display': 'block', 'marginBottom': '5px'}
-                ),
-                html.Br(),
-                html.H3("Select Days"),
-                dcc.Dropdown(
-                    id='days-selector',
-                    options=[
-                        {'label': '30 Days', 'value': 30},
-                        {'label': '90 Days', 'value': 90},
-                        {'label': '180 Days', 'value': 180},
-                        {'label': '365 Days', 'value': 365},
-                        {'label': 'All Data', 'value': 0}
-                    ],
-                    value=90,
-                    clearable=False
-                )
-            ], style={
-                'padding': '20px',
-                'backgroundColor': '#f9f9f9',
-                'borderRadius': '10px',
-                'boxShadow': '0 4px 6px rgba(0,0,0,0.1)'
-            })
-        ], style={'width': '22%', 'marginLeft': '2%', 'display': 'inline-block', 'verticalAlign': 'top'})
-    ], style={'display': 'flex', 'marginBottom': '40px'}),
-
-    # Bottom Section: Table
     html.Div([
-        html.H2("Index Percentage Change", style={'textAlign': 'center', 'marginBottom': '20px'}),
-        html.Div(id='table-container')
-    ], style={'width': '100%'})
-], style={'padding': '20px', 'fontFamily': 'Arial, sans-serif'})
+        html.H2("Performance Table (Expand rows to see constituents)"),
+        dag.AgGrid(
+            id="expandable-table",
+            columnDefs=column_defs,
+            rowData=master_data,
+            masterDetail=True,
+            detailCellRendererParams={
+                "detailGridOptions": {
+                    "columnDefs": detail_column_defs,
+                    "defaultColDef": {"resizable": True, "sortable": True}
+                },
+                "detailColName": "constituents",
+            },
+            defaultColDef={"resizable": True, "filter": True, "sortable": True},
+            style={"height": "600px", "width": "100%"},
+            dangerously_allow_code=True,
+            enableEnterpriseModules=True
+        )
+    ])
+], style={'padding': '20px'})
 
 @app.callback(
-    [Output('index-graph', 'figure'),
-     Output('table-container', 'children')],
-    [Input('index-selector', 'value'),
-     Input('days-selector', 'value')]
+    Output('index-graph', 'figure'),
+    [Input('index-selector', 'value'), Input('days-selector', 'value')]
 )
-def update_dashboard(selected_indices, selected_days):
-    if not selected_indices:
-        return go.Figure(), html.Div("Please select at least one index.")
-
-    filtered_df = df[df['Index_Name'].isin(selected_indices)]
-
+def update_graph(selected_indices, selected_days):
+    if not selected_indices: return go.Figure()
+    filtered = df_indices[df_indices['Index_Name'].isin(selected_indices)]
     if selected_days > 0:
-        latest_date = df['Date'].max()
-        cutoff_date = latest_date - pd.Timedelta(days=selected_days)
-        filtered_df = filtered_df[filtered_df['Date'] >= cutoff_date]
-
+        cutoff = df_indices['Date'].max() - pd.Timedelta(days=selected_days)
+        filtered = filtered[filtered['Date'] >= cutoff]
     fig = go.Figure()
-    for index in selected_indices:
-        index_df = filtered_df[filtered_df['Index_Name'] == index].sort_values('Date')
-        fig.add_trace(go.Scatter(
-            x=index_df['Date'],
-            y=index_df['Close_Index_Value'],
-            mode='lines',
-            name=index
-        ))
-
-    fig.update_layout(
-        title="Index Value Over Time",
-        xaxis_title="Date",
-        yaxis_title="Close Value",
-        hovermode="x unified",
-        margin={'l': 40, 'b': 40, 't': 40, 'r': 10},
-        legend={'orientation': 'h', 'yanchor': 'bottom', 'y': 1.02, 'xanchor': 'right', 'x': 1}
-    )
-
-    table = dash_table.DataTable(
-        columns=[{"name": i, "id": i} for i in pct_change_df.columns],
-        data=pct_change_df.to_dict('records'),
-        style_table={'overflowX': 'auto', 'border': '1px solid #ccc'},
-        style_cell={'textAlign': 'left', 'padding': '12px', 'minWidth': '100px'},
-        style_header={'backgroundColor': '#f4f4f4', 'fontWeight': 'bold', 'border': '1px solid #ccc'},
-        style_data={'border': '1px solid #eee'}
-    )
-
-    return fig, table
+    for idx in selected_indices:
+        d = filtered[filtered['Index_Name'] == idx].sort_values('Date')
+        fig.add_trace(go.Scatter(x=d['Date'], y=d['Close_Index_Value'], name=idx, mode='lines'))
+    return fig
 
 if __name__ == '__main__':
     app.run(debug=True)
